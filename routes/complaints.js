@@ -4,22 +4,24 @@ const Student = require('../models/Student')
 const Worker = require('../models/Worker')
 const router = express.Router()
 
-// Create complaint
+// CREATE COMPLAINT (STUDENT)
 router.post('/', async (req, res) => {
   try {
     const student = await Student.findById(req.body.student_id)
     if (!student) {
       return res.status(404).json({ message: 'Student not found' })
     }
-    
+
     const complaint = new Complaint({
       description: req.body.description,
       image: req.body.image || '',
       category: req.body.category,
       student_id: req.body.student_id,
       student_name: student.name,
-      room_number: student.room_number
+      room_number: student.room_number,
+      status: 'pending' // ✅ EXPLICIT
     })
+
     await complaint.save()
     res.json({ ...complaint.toObject(), id: complaint._id })
   } catch (err) {
@@ -27,17 +29,20 @@ router.post('/', async (req, res) => {
   }
 })
 
-// Get complaints by student
+// GET COMPLAINTS BY STUDENT
 router.get('/student/:studentId', async (req, res) => {
   try {
-    const complaints = await Complaint.find({ student_id: req.params.studentId }).sort({ createdAt: -1 })
+    const complaints = await Complaint.find({
+      student_id: req.params.studentId
+    }).sort({ createdAt: -1 })
+
     res.json(complaints.map(c => ({ ...c.toObject(), id: c._id })))
   } catch (err) {
     res.status(500).json({ message: err.message })
   }
 })
 
-// Get all complaints (for warden)
+// GET ALL COMPLAINTS (WARDEN / WORKER)
 router.get('/all', async (req, res) => {
   try {
     const complaints = await Complaint.find().sort({ createdAt: -1 })
@@ -47,32 +52,26 @@ router.get('/all', async (req, res) => {
   }
 })
 
-// Get complaints by worker
-router.get('/worker/:workerId', async (req, res) => {
-  try {
-    const complaints = await Complaint.find({ assigned_worker_id: req.params.workerId }).sort({ createdAt: -1 })
-    res.json(complaints.map(c => ({ ...c.toObject(), id: c._id })))
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-})
-
-// Update complaint (student edit)
+// UPDATE COMPLAINT (STUDENT EDIT)
 router.put('/:id', async (req, res) => {
   try {
-    const updateData = {
-      description: req.body.description,
-      category: req.body.category,
-      image: req.body.image || ''
-    }
-    const complaint = await Complaint.findByIdAndUpdate(req.params.id, updateData, { new: true })
+    const complaint = await Complaint.findByIdAndUpdate(
+      req.params.id,
+      {
+        description: req.body.description,
+        category: req.body.category,
+        image: req.body.image || ''
+      },
+      { new: true }
+    )
+
     res.json({ ...complaint.toObject(), id: complaint._id })
   } catch (err) {
     res.status(400).json({ message: err.message })
   }
 })
 
-// Delete complaint
+// DELETE COMPLAINT
 router.delete('/:id', async (req, res) => {
   try {
     await Complaint.findByIdAndDelete(req.params.id)
@@ -82,23 +81,40 @@ router.delete('/:id', async (req, res) => {
   }
 })
 
-// Update complaint status
+// UPDATE STATUS (WARDEN + WORKER)
 router.patch('/:id/status', async (req, res) => {
   try {
+    const complaint = await Complaint.findById(req.params.id)
+    if (!complaint) {
+      return res.status(404).json({ message: 'Complaint not found' })
+    }
+
     const { status, assigned_worker_id, warden_comments } = req.body
-    const updateData = { status }
-    
-    if (warden_comments) {
-      updateData.warden_comments = warden_comments
+
+    // ✅ WARDEN ACTION
+    if (status === 'accepted' || status === 'rejected') {
+      complaint.status = status
+      complaint.warden_comments = warden_comments || ''
     }
-    
-    if (assigned_worker_id) {
+
+    // ✅ WORKER TAKES JOB
+    if (status === 'in-progress' && assigned_worker_id) {
       const worker = await Worker.findById(assigned_worker_id)
-      updateData.assigned_worker_id = assigned_worker_id
-      updateData.assigned_worker_name = worker.name
+      if (!worker) {
+        return res.status(404).json({ message: 'Worker not found' })
+      }
+
+      complaint.status = 'in-progress'
+      complaint.assigned_worker_id = worker._id
+      complaint.assigned_worker_name = worker.name
     }
-    
-    const complaint = await Complaint.findByIdAndUpdate(req.params.id, updateData, { new: true })
+
+    // ✅ WORKER COMPLETES JOB
+    if (status === 'completed') {
+      complaint.status = 'completed'
+    }
+
+    await complaint.save()
     res.json({ ...complaint.toObject(), id: complaint._id })
   } catch (err) {
     res.status(400).json({ message: err.message })
